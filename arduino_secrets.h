@@ -1,0 +1,4 @@
+#define SECRET_SSID "XXXXX"
+#define SECRET_PASS "XXXXX"
+
+#define MQTT_BROKER_ADDR "192.168.0.1"
