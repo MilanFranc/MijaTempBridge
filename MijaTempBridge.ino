@@ -57,6 +57,10 @@ const char topicType[]  = "data";
 SoftTimer bleDeviceScanTimer;
 SoftTimer bleDataScanTimer;
 
+const unsigned long nDataRefreshTime = 15 * 60 * 1000;  // 15 minutes
+const unsigned long nDevicesRefreshTime = 4 * 60 * 60 * 1000;   //4 hours
+const int nDeviceScanTimeout = 30; //seconds
+
 
 const int STATE_IDLE = 0;
 const int STATE_READ_BLE_DATA = 1;
@@ -464,11 +468,11 @@ void setup() {
 
     WiFi.mode(WIFI_STA);
 
-    bleDeviceScanTimer.setTimeOutTime(4 * 60 * 60 * 1000);  //4 hour
-    bleDataScanTimer.setTimeOutTime(15 * 1000); //15 sec
+    bleDeviceScanTimer.setTimeOutTime(nDevicesRefreshTime);
+    bleDataScanTimer.setTimeOutTime(nDataRefreshTime);
     
     initBLEDev();
-    scanForDevices(30);
+    scanForDevices(nDeviceScanTimeout);
 
     bleDeviceScanTimer.reset();
     bleDataScanTimer.reset();
@@ -483,7 +487,7 @@ void loop() {
     case STATE_IDLE:
         Serial.println("State: IDLE");
         if (bleDeviceScanTimer.hasTimedOut()) {
-            scanForDevices(30);
+            scanForDevices(nDeviceScanTimeout);
             bleDeviceScanTimer.reset();
         }
     
