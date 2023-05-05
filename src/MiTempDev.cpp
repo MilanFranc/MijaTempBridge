@@ -2,6 +2,7 @@
 
 
 MiTempDev::MiTempDev(const char* pBLEAddr)
+    : m_updated(false), m_batteryLevel(0), m_rssiLevel(0)
 {
     m_BLEAddr = String(pBLEAddr);
 }
@@ -23,7 +24,7 @@ const char* MiTempDev::devId()
 
 void MiTempDev::setName(const char* name)
 {
-    m_name = name;
+    m_name = String(name);
 }
 
 void MiTempDev::setBatteryLevel(uint16_t level)
@@ -31,7 +32,17 @@ void MiTempDev::setBatteryLevel(uint16_t level)
     m_batteryLevel = level;
 }
 
-void MiTempDev::setBLEData(const uint8_t* data, size_t length)
+void MiTempDev::setRSSILevel(int level)
+{
+    m_rssiLevel = level;
+}
+
+void MiTempDev::clearUpdatedFlag()
+{
+    m_updated = false;
+}
+
+void MiTempDev::parseBLEData(const uint8_t* data, size_t length)
 {
     String temp;
     temp.reserve(8);
@@ -41,32 +52,33 @@ void MiTempDev::setBLEData(const uint8_t* data, size_t length)
     //TODO: parssing: T=23.5 H=52.4
     int idx = 0;
     if (length > 2 && data[idx] == 'T' && data[idx+1] == '=') {
-      idx += 2;
+        idx += 2;
 
-      for(; idx < length; idx++) {
-         if (data[idx] == ' ')
-           break;
+        for(; idx < length; idx++) {
+            if (data[idx] == ' ')
+            break;
 
-         temp += (char)data[idx];
-      }
+            temp += (char)data[idx];
+        }
 
-      m_temperatureValue = temp;
+        m_temperatureValue = temp;
 
-      idx++;  //skip space
+        idx++;  //skip space
     }
 
     if ((length - idx) > 2 && data[idx] == 'H' && data[idx+1] == '=') {
-      idx += 2;
+        idx += 2;
 
-      temp = "";
-      for(; idx < length; idx++) {
-         if (data[idx] == ' ')
-           break;
+        temp = "";
+        for(; idx < length; idx++) {
+            if (data[idx] == ' ')
+            break;
 
-         temp += (char)data[idx];
-      }
+            temp += (char)data[idx];
+        }
 
-      m_humidityValue = temp;
+        m_humidityValue = temp;
+        m_updated = true;
     }
 }
 
@@ -80,7 +92,3 @@ const char* MiTempDev::getHumidity()
     return m_humidityValue.c_str();
 }
 
-uint16_t MiTempDev::getBatteryLevel()
-{
-    return m_batteryLevel;
-}
