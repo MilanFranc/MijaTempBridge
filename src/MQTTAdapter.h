@@ -1,12 +1,12 @@
 #ifndef MQTT_ADAPTER_H
 #define MQTT_ADAPTER_H
 
-class MiTempDev;
+class MyBLEDevice;
 
 bool connectToMQTT();
 
 void sendStatusOnlineMsg();
-void sendMiTempDataToMQTT(MiTempDev* pDev);
+void sendMiTempDataToMQTT(MyBLEDevice* pDev);
 
 void pollMQTT();
 void flushMQTT();

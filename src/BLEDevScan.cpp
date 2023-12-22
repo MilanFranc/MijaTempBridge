@@ -22,14 +22,14 @@ public:
     AdvertisedDeviceCallbacks(TonDeviceFoundCB deviceFoundCB) : m_deviceFoundCB(deviceFoundCB) {}
 
     void onResult(NimBLEAdvertisedDevice* advertisedDevice) override {
-        Serial.print("Advertised Device found:");
+        Serial.print("Device:");
         NimBLEAddress addr = advertisedDevice->getAddress();
-        Serial.print(" Addr:");
+        Serial.print(" Mac:");
         Serial.print(addr.toString().c_str());
-        Serial.print(" Name:");
-        Serial.print(advertisedDevice->getName().c_str());
         Serial.print(" RSSI:");
         Serial.print(String(advertisedDevice->getRSSI()));
+        Serial.print(" Name:");
+        Serial.print(advertisedDevice->getName().c_str());
         Serial.println();
 
         if (m_deviceFoundCB) 

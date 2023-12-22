@@ -1,4 +1,5 @@
 
+
 /** 
  *
  *  Demonstrates many of the available features of the NimBLE client library.
@@ -27,8 +28,7 @@
 
 #include "MQTTAdapter.h"
 
-#include "MiTempDevices.h"
-#include "MiTempDev.h"
+#include "MyBLEDevice.h"
 
 #include "BLEDevScan.h"
 #include "utils.h"
@@ -59,9 +59,9 @@ NimBLEScan* pBLEScan = NULL;
 SoftTimer bleDeviceScanTimer;
 SoftTimer bleDataScanTimer;
 
-const unsigned long nDataRefreshTime = 2 * 60 * 1000;  // 15 minutes
+const unsigned long nDataRefreshTime = 15 * 60 * 1000;  // 15 minutes
 const unsigned long nDevicesRefreshTime = 4 * 60 * 60 * 1000;   //4 hours
-const int nDeviceScanTimeout = 50; //seconds
+const int nDeviceScanTimeout = 90; //seconds
 
 
 const int STATE_IDLE = 0;
@@ -75,9 +75,14 @@ int nCurrentState = STATE_IDLE;
 int count = 0;
 
 
-ArduinoQueue<MiTempDev*> myUpdateList(30);
+ArduinoQueue<MyBLEDevice*> myUpdateList(30);
 
-extern std::vector<MiTempDev*> myDevicesList;
+std::vector<MyBLEDevice*> myDevicesList;
+
+
+const int g_maxNumberOfConnectAttempts = 20;
+const uint32_t g_timeToRestartAfterConnectionFailed = 5 * 60 * 1000;
+
 
 /////////////////////////////////////////////////////////////////////
 
@@ -119,6 +124,9 @@ void initBLEDev()
     /** Initialize NimBLE, no device name spcified as we are not advertising */
     NimBLEDevice::init("");
 
+    //TODO: make it optional - by settings
+    /** Optional: set the transmit power, default is 3db */
+    NimBLEDevice::setPower(ESP_PWR_LVL_P9); /** +9db */
 
 #if 0
     /** Set the IO capabilities of the device, each option will trigger a different pairing method.
@@ -136,9 +144,6 @@ void initBLEDev()
      */
     //NimBLEDevice::setSecurityAuth(false, false, true);
     NimBLEDevice::setSecurityAuth(/*BLE_SM_PAIR_AUTHREQ_BOND | BLE_SM_PAIR_AUTHREQ_MITM |*/ BLE_SM_PAIR_AUTHREQ_SC);
-
-    /** Optional: set the transmit power, default is 3db */
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9); /** +9db */
 #endif
   
 }
@@ -148,7 +153,7 @@ void deinitBLEDev()
     if (!NimBLEDevice::getInitialized())
         return;
 
-    NimBLEDevice::deinit();
+    NimBLEDevice::deinit(true);
 }
 
 bool connectToWifiAndMQTT()
@@ -161,7 +166,7 @@ bool connectToWifiAndMQTT()
         Serial.print("Attempting to connect to WPA SSID: ");
         Serial.println(ssid);
     
-        for(int i = 0; i < 20 ; i++) {
+        for(int i = 0; i < g_maxNumberOfConnectAttempts; i++) {
             if (WiFi.status() == WL_CONNECTED) {
                 break;
             }
@@ -171,11 +176,11 @@ bool connectToWifiAndMQTT()
             delay(5000);
         }
     
+        Serial.println();
         if (WiFi.status() != WL_CONNECTED) {
             return false;
         }
 
-        Serial.println();
         Serial.println("You're connected to the network");
     }
     else {
@@ -185,6 +190,17 @@ bool connectToWifiAndMQTT()
     return connectToMQTT();
 }
 
+void turnOffWifi()
+{
+    if (WiFi.getMode() != WIFI_OFF) {
+        Serial.println("WiFi disconnect");
+        if (!WiFi.disconnect(true)) {
+            Serial.println("WiFi disconnect failed!!");
+        }
+        delay(100);
+        WiFi.mode(WIFI_OFF);
+    }
+}
 
 //void setupScanDev()
 //{
@@ -198,43 +214,44 @@ bool connectToWifiAndMQTT()
 //  
 //}
 
-#if 0
-void scanForDevices(int timeout)
+
+static uint32_t g_oldCPUFrequency = 0; //
+
+void setupModemSleep()
 {
-    Serial.println("Start scan..");
-  
-    pBLEScan = NimBLEDevice::getScan(); //create new scan
-//    setupScanDev();
+    assert(WiFi.getMode() != WIFI_OFF);
+    WiFi.setSleep(true);
+    g_oldCPUFrequency = getCpuFrequencyMhz();
+    if (!setCpuFrequencyMhz(40)){
+        Serial2.println("Not valid frequency!");
+    }
+    // Use this if 40Mhz is not supported
+    // setCpuFrequencyMhz(80);
+    delay(10);    
+}
 
-    NimBLEScanResults results = pBLEScan->start(timeout, false);
+void resumeModemSleep() {
+    assert(g_oldCPUFrequency != 0);
+    setCpuFrequencyMhz(g_oldCPUFrequency);
+    delay(10);
+    WiFi.setSleep(false);
+}
 
-    Serial.println("Scan done.");
+//void loop() {}
+void enterModemSleep(unsigned long period)
+{
+    setupModemSleep();
 
-    const uint8_t addrPrefix[3] = { 0x58, 0x2d, 0x34 };
-
-    std::vector<NimBLEAdvertisedDevice*>::iterator it;
-    for(it = results.begin(); it != results.end(); ++it) {
-        NimBLEAdvertisedDevice* pAdvDevice = *it;
-      
-        NimBLEAddress addr = pAdvDevice->getAddress();
-        const uint8_t* natAddr = addr.getNative();
-
-        if (natAddr[5] == addrPrefix[0] && natAddr[4] == addrPrefix[1] &&
-            natAddr[3] == addrPrefix[2]) {
-
-            Serial.println("Addr:" + String(addr.toString().c_str()));
-
-            createMiTempDevice(pAdvDevice);
-        }
+    unsigned long startLoop = millis();
+    for(;;) {
+        if ((startLoop + period) < millis())
+            break;
     }
 
-    Serial.println("Done.");
+    resumeModemSleep();
 }
-#endif
-
 
 /////////////////////////////////////////////////////////////////////////////////////
-
 
 void InitState0();
 void UpdateState0();
@@ -252,9 +269,13 @@ void UpdateState4();
 
 void setup() {
     Serial.begin(115200);
-    Serial.println("Starting BLE Bridge ver:" APP_VERSION);
+    while(!Serial) { delay(500); }
 
-    WiFi.mode(WIFI_STA);
+    Serial1.begin(115200);
+    while(!Serial1) { delay(500); }
+
+    Serial.println("Starting BLE Bridge ver:" APP_VERSION " Build:" APP_BUILD_DATE);
+    Serial1.println("Starting BLE Bridge ver:" APP_VERSION " Build:" APP_BUILD_DATE);
 
     bleDeviceScanTimer.setTimeOutTime(nDevicesRefreshTime);
     bleDataScanTimer.setTimeOutTime(nDataRefreshTime);
@@ -266,10 +287,11 @@ void setup() {
 
 void InitState0()
 {
-    nCurrentState = 0;    
+    nCurrentState = 0;
+    WiFi.mode(WIFI_STA);
     if (!connectToWifiAndMQTT()) {
         Serial.println("Unable to connect to wifi.");
-        delay(5000);
+        delay(g_timeToRestartAfterConnectionFailed);
 
         ESP.restart();
     }
@@ -278,8 +300,7 @@ void InitState0()
     pollMQTT();    
     delay(500);
 
-    Serial.println("Disconnect Wifi");
-    WiFi.disconnect();
+    turnOffWifi();
     delay(500);    
 
     InitState1();
@@ -291,34 +312,43 @@ void UpdateState0()
 }
 
 ///////////////////////////////////////
+//TODO: what about devices that are not found ?
 
-bool filterDevices(NimBLEAdvertisedDevice* pAdvDevice)
+MyBLEDevice* findAdvDeviceInList(NimBLEAdvertisedDevice* pAdvertDevice)
 {
-    const uint8_t addrPrefix[3] = { 0x58, 0x2d, 0x34 };
+    NimBLEAddress addr = pAdvertDevice->getAddress();
 
-    NimBLEAddress addr = pAdvDevice->getAddress();
-    const uint8_t* natAddr = addr.getNative();
-
-    if (natAddr[5] == addrPrefix[0] && natAddr[4] == addrPrefix[1] &&
-        natAddr[3] == addrPrefix[2]) 
-    {
-        if (pAdvDevice->getName() == "MJ_HT_V1") {
-            return true;
+    bool found = false;
+    for (MyBLEDevice* item : myDevicesList) {
+        if (std::string(item->addr()) == addr.toString()) {
+            return item;
         }
     }
-    return false;
+
+    return nullptr;
 }
+
 
 void onDeviceFound(NimBLEAdvertisedDevice* pDevice)
 {
     if (pDevice == nullptr) {   //Scan end
-        InitState2();
         bleDeviceScanTimer.reset();
+
+        InitState2();
         return;
     }
     else {
-        if (filterDevices(pDevice)) {
-            MiTempDev* newDev = createMiTempDev(pDevice);
+
+        MyBLEDevice* pTempDev = findAdvDeviceInList(pDevice);
+        if (pTempDev == nullptr) {
+            pTempDev = MyBLEDevice::createDev(pDevice); //  new MiTempDev(addr.toString().c_str());
+            if (pTempDev != nullptr) {
+                Serial.println("Create new device:" + String(pTempDev->addr()));
+                Serial.println("Id:" + String(pTempDev->devId()) );
+                Serial.println("N:" + String(pTempDev->name()) );
+
+                myDevicesList.push_back(pTempDev);
+            }
         }
     }
 }
@@ -326,8 +356,11 @@ void onDeviceFound(NimBLEAdvertisedDevice* pDevice)
 void InitState1()
 {
     nCurrentState = 1;
+    turnOffWifi();
+    delay(200);
+
     initBLEDev();
-    vTaskDelay(500 / portTICK_PERIOD_MS);
+    delay(200);
 
     startBLEDevicesScan(nDeviceScanTimeout, onDeviceFound);
 }
@@ -339,9 +372,13 @@ void UpdateState1()
 
 ///////////////////////////////////////
 
+static int nUpdateListEmptyCounter = 0;
+
 void InitState2()
 {
     nCurrentState = 2;
+    turnOffWifi();
+    delay(200);
 
     initBLEDev();
     vTaskDelay(500 / portTICK_PERIOD_MS);
@@ -352,30 +389,43 @@ void UpdateState2()
     Serial.println("State: Read sensors data");
     if (!myDevicesList.empty()) {
 
-        std::vector<MiTempDev*>::iterator it;
+        std::vector<MyBLEDevice*>::iterator it;
         for(it = myDevicesList.begin(); it != myDevicesList.end(); ++it) {
-            if (connectAndReadDevice(*it)) {
-                myUpdateList.enqueue(*it);
+            MyBLEDevice* pDev = (*it);
+            assert(pDev);
+
+            //TODO: add check for device if it doesn't respond..
+            if (pDev->connectAndReadDevice()) {
+                myUpdateList.enqueue(pDev);
             }
 
+            Serial.println("Updated..");
             vTaskDelay(500 / portTICK_PERIOD_MS);
         }
 
-        Serial.println("Update:" + String(myUpdateList.itemCount()));
         if (!myUpdateList.isEmpty()) {
-            InitState3();
-            return;
-        }
+            nUpdateListEmptyCounter = 0;
 
-        //TODO: ????
-        //nCurrentState = STATE_CONNECT_WIFI_AND_MQTT;
-        //sleepTime = 500;
+            Serial.println("Update count " + String(myUpdateList.itemCount()));            
+            InitState3();
+        }
+        else {
+            Serial.println("Update list is empty.... enter sleep");
+
+            nUpdateListEmptyCounter++;
+            if (nUpdateListEmptyCounter > 5) {
+                Serial.println("Rescan devices..");
+                InitState1();
+            }
+            else {
+                InitState4();
+            }
+        }
     }
     else {
         Serial.println("Device list is empty!");      
+        InitState1();
     }
-
-    vTaskDelay(20000 / portTICK_PERIOD_MS);
 }
 
 ///////////////////////////////////////
@@ -386,16 +436,19 @@ void InitState3()
     Serial.println("State: WiFi and MQTT connect");
 
     deinitBLEDev();
-    vTaskDelay(5000 / portTICK_PERIOD_MS);
+    delay(2000);
 
+    WiFi.mode(WIFI_STA);
     if (connectToWifiAndMQTT()) {
 
-        vTaskDelay(50 / portTICK_PERIOD_MS);
+        delay(50);
         sendStatusOnlineMsg();
     }
     else {
         Serial.println("Unable to connect to WiFi!");
-        nCurrentState = 99; //Error..
+        delay(2000);
+
+        ESP.restart();
     }
 }
 
@@ -405,8 +458,8 @@ void UpdateState3()
     // avoids being disconnected by the broker
     pollMQTT();
 
-    MiTempDev* pDev;
-    for(int i = 0; i < 1; i++) {
+    MyBLEDevice* pDev;
+    for(int i = 0; i < 5; i++) {
         if (myUpdateList.isEmpty())
             break;
 
@@ -418,10 +471,7 @@ void UpdateState3()
     Serial.println();
 
     if (myUpdateList.isEmpty()) {
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
 
-        Serial.println("WiFi disconnect");
-        WiFi.disconnect();
         count++;     
 
         InitState4();
@@ -454,8 +504,48 @@ void UpdateState4()
     delay(1000);
 }
 
+///////////////////////////////////////
+
+void InitState5()
+{
+    Serial.flush();
+
+
+#if 0
+    WiFi.mode(WIFI_STA);
+    if (connectToWifiAndMQTT()) {
+        enterModemSleep(20000);
+
+
+    }
+
+
+
+
+        delay(50);
+        sendStatusOnlineMsg();
+    }
+    else {
+        Serial.println("Unable to connect to WiFi!");
+        delay(2000);
+
+        ESP.restart();
+    }
+#endif
+
+}
+
+void UpdateState5()
+{
+
+}
+
+///////////////////////////////////////
+
 void loop() 
 {
+    Serial1.println("Hello world..");
+
     switch(nCurrentState) {
     case 0: UpdateState0(); break;
     case 1: UpdateState1(); break;

@@ -29,6 +29,21 @@ String getMacAddrString()
     return strMacAddr;
 }
 
+String removeColons(const std::string& addr)
+{
+    int idx = 0;
+    char buffer[16];
+    for(int chr : addr) {
+        if (chr != ':') {
+            buffer[idx] = chr; idx++;
+        }
+    }
+    buffer[idx] = '\0';
+    return String(buffer, idx);
+}
+
+
+
 
 
 }

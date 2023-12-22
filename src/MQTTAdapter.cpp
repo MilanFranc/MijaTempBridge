@@ -6,7 +6,7 @@
 
 #include "arduino_secrets.h"
 
-#include "MiTempDev.h"
+#include "MyBLEDevice.h"
 #include "utils.h"
 
 
@@ -74,16 +74,9 @@ void sendStatusOnlineMsg()
     mqttClient.endMessage();
 }
 
-void sendMiTempDataToMQTT(MiTempDev* pDev)
+void sendMiTempDataToMQTT(MyBLEDevice* pDev)
 {
-    StaticJsonDocument<200> doc;
-    doc["temp"] = pDev->getTemp();
-    doc["humidity"] = pDev->getHumidity();
-    doc["batt"] = pDev->getBatteryLevel();
-    doc["rssi"] = pDev->getRSSILevel();
-
-    String jsonData;
-    serializeJson(doc, jsonData);
+    String jsonData = pDev->getData();
 
     String topic = topicPrefix;
     topic += pDev->devId();
