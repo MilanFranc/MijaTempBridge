@@ -7,11 +7,15 @@
  *
 */
 
+#define FS_NO_GLOBALS
+
 #include <NimBLEDevice.h>
 
 #include <ArduinoQueue.h>
 #include <SoftTimers.h>
 #include <ArduinoJson.h>
+#include <FS.h>
+#include <LittleFS.h>
 
 #include <freertos/task.h>
 
@@ -29,6 +33,7 @@
 #include "MQTTAdapter.h"
 
 #include "MyBLEDevice.h"
+#include "BLESensorsMngr.h"
 
 #include "BLEDevScan.h"
 #include "utils.h"
@@ -41,6 +46,10 @@
 char ssid[] = SECRET_SSID;    // your network SSID (name)
 char pass[] = SECRET_PASS;    // your network password (use for WPA, or use as key for WEP)
 
+const char mqtt_broker[] = MQTT_BROKER_ADDR;
+int        mqtt_port     = 1883;
+
+#define BLE_DEVICES_LIST  "/BLEDevList1"
 
 /**
  * Mija temperature and humidity
@@ -52,9 +61,7 @@ char pass[] = SECRET_PASS;    // your network password (use for WPA, or use as k
  * 
  */
 
-
 NimBLEScan* pBLEScan = NULL;
-
 
 SoftTimer bleDeviceScanTimer;
 SoftTimer bleDataScanTimer;
@@ -74,11 +81,9 @@ int nCurrentState = STATE_IDLE;
 
 int count = 0;
 
-
 ArduinoQueue<MyBLEDevice*> myUpdateList(30);
 
-std::vector<MyBLEDevice*> myDevicesList;
-
+BLESensorsMngr myDevices;
 
 const int g_maxNumberOfConnectAttempts = 20;
 const uint32_t g_timeToRestartAfterConnectionFailed = 5 * 60 * 1000;
@@ -187,11 +192,13 @@ bool connectToWifiAndMQTT()
         Serial.println("Still connected to the network");    
     }
 
-    return connectToMQTT();
+    return connectToMqtt();
 }
 
 void turnOffWifi()
 {
+
+#if 0    
     if (WiFi.getMode() != WIFI_OFF) {
         Serial.println("WiFi disconnect");
         if (!WiFi.disconnect(true)) {
@@ -200,6 +207,8 @@ void turnOffWifi()
         delay(100);
         WiFi.mode(WIFI_OFF);
     }
+#endif
+
 }
 
 //void setupScanDev()
@@ -237,7 +246,6 @@ void resumeModemSleep() {
     WiFi.setSleep(false);
 }
 
-//void loop() {}
 void enterModemSleep(unsigned long period)
 {
     setupModemSleep();
@@ -265,8 +273,6 @@ void InitState4();
 void UpdateState4();
 
 
-
-
 void setup() {
     Serial.begin(115200);
     while(!Serial) { delay(500); }
@@ -277,9 +283,17 @@ void setup() {
     Serial.println("Starting BLE Bridge ver:" APP_VERSION " Build:" APP_BUILD_DATE);
     Serial1.println("Starting BLE Bridge ver:" APP_VERSION " Build:" APP_BUILD_DATE);
 
+    setupMqtt(mqtt_broker, mqtt_port);
+
     bleDeviceScanTimer.setTimeOutTime(nDevicesRefreshTime);
     bleDataScanTimer.setTimeOutTime(nDataRefreshTime);
-    
+
+    // check file system exists
+    if (!LittleFS.begin(true)) {
+        Serial.println("LittleFS failed.");
+        while(true) {};
+    }
+
     InitState0();
 }
 
@@ -296,8 +310,6 @@ void InitState0()
         ESP.restart();
     }
 
-    sendStatusOnlineMsg();
-    pollMQTT();    
     delay(500);
 
     turnOffWifi();
@@ -314,19 +326,6 @@ void UpdateState0()
 ///////////////////////////////////////
 //TODO: what about devices that are not found ?
 
-MyBLEDevice* findAdvDeviceInList(NimBLEAdvertisedDevice* pAdvertDevice)
-{
-    NimBLEAddress addr = pAdvertDevice->getAddress();
-
-    bool found = false;
-    for (MyBLEDevice* item : myDevicesList) {
-        if (std::string(item->addr()) == addr.toString()) {
-            return item;
-        }
-    }
-
-    return nullptr;
-}
 
 
 void onDeviceFound(NimBLEAdvertisedDevice* pDevice)
@@ -334,22 +333,16 @@ void onDeviceFound(NimBLEAdvertisedDevice* pDevice)
     if (pDevice == nullptr) {   //Scan end
         bleDeviceScanTimer.reset();
 
+        //TODO:
+        //Convert myDevicesList to ...
+        //Write dev list to file
+
+
         InitState2();
         return;
     }
     else {
-
-        MyBLEDevice* pTempDev = findAdvDeviceInList(pDevice);
-        if (pTempDev == nullptr) {
-            pTempDev = MyBLEDevice::createDev(pDevice); //  new MiTempDev(addr.toString().c_str());
-            if (pTempDev != nullptr) {
-                Serial.println("Create new device:" + String(pTempDev->addr()));
-                Serial.println("Id:" + String(pTempDev->devId()) );
-                Serial.println("N:" + String(pTempDev->name()) );
-
-                myDevicesList.push_back(pTempDev);
-            }
-        }
+        myDevices.onDeviceFound(pDevice);
     }
 }
 
@@ -387,44 +380,31 @@ void InitState2()
 void UpdateState2()
 {
     Serial.println("State: Read sensors data");
-    if (!myDevicesList.empty()) {
 
-        std::vector<MyBLEDevice*>::iterator it;
-        for(it = myDevicesList.begin(); it != myDevicesList.end(); ++it) {
-            MyBLEDevice* pDev = (*it);
-            assert(pDev);
-
-            //TODO: add check for device if it doesn't respond..
-            if (pDev->connectAndReadDevice()) {
-                myUpdateList.enqueue(pDev);
-            }
-
-            Serial.println("Updated..");
-            vTaskDelay(500 / portTICK_PERIOD_MS);
-        }
-
-        if (!myUpdateList.isEmpty()) {
-            nUpdateListEmptyCounter = 0;
-
-            Serial.println("Update count " + String(myUpdateList.itemCount()));            
-            InitState3();
-        }
-        else {
-            Serial.println("Update list is empty.... enter sleep");
-
-            nUpdateListEmptyCounter++;
-            if (nUpdateListEmptyCounter > 5) {
-                Serial.println("Rescan devices..");
-                InitState1();
-            }
-            else {
-                InitState4();
-            }
-        }
-    }
-    else {
+    if (myDevices.deviceCount() == 0) {
         Serial.println("Device list is empty!");      
         InitState1();
+        return;
+    }
+
+    int count = myDevices.connectAndReadData(myUpdateList);
+    if (count > 0) {
+        nUpdateListEmptyCounter = 0;
+
+        Serial.println("Update count " + String(myUpdateList.itemCount()));            
+        InitState3();
+    }
+    else {
+        Serial.println("Update list is empty.... enter sleep");
+
+        nUpdateListEmptyCounter++;
+        if (nUpdateListEmptyCounter > 5) {
+            Serial.println("Rescan devices..");
+            InitState1();
+        }
+        else {
+            InitState4();
+        }
     }
 }
 
@@ -442,7 +422,6 @@ void InitState3()
     if (connectToWifiAndMQTT()) {
 
         delay(50);
-        sendStatusOnlineMsg();
     }
     else {
         Serial.println("Unable to connect to WiFi!");
@@ -454,31 +433,27 @@ void InitState3()
 
 void UpdateState3()
 {
-    // call poll() regularly to allow the library to send MQTT keep alives which
-    // avoids being disconnected by the broker
-    pollMQTT();
-
-    MyBLEDevice* pDev;
+    MyBLEDevice* pDev = nullptr;
     for(int i = 0; i < 5; i++) {
         if (myUpdateList.isEmpty())
             break;
 
         pDev = myUpdateList.dequeue();
-        sendMiTempDataToMQTT(pDev);
+        assert(pDev);
+        sendSensorDataToMQTT(pDev->devId(), pDev->getData());        
     }
 
-    flushMQTT();
+    delay(10);  //to flush MQTT data...
     Serial.println();
 
     if (myUpdateList.isEmpty()) {
 
-        count++;     
+        count++;
 
         InitState4();
     }
     else {
-        vTaskDelay(50 / portTICK_PERIOD_MS);
-
+        delay(50);
     }
 }
 

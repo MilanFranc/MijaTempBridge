@@ -8,7 +8,6 @@
 
 #include <ArduinoJson.h>
 
-uint32_t g_bleConnectTimeout = 50;
 
 
     #if 0 //temp remove        
@@ -26,75 +25,9 @@ uint32_t g_bleConnectTimeout = 50;
 
 
 
-namespace internal {
-
-    NimBLEClient* connectToBLEDevice(const char* pBLEAddr, uint32_t timeout)
-    {
-        NimBLEClient* pClient = nullptr;
-
-        NimBLEAddress addr(pBLEAddr);
-        if (NimBLEDevice::getClientListSize() > 0) {
-            /** Special case when we already know this device, we send false as the
-             *  second argument in connect() to prevent refreshing the service database.
-             *  This saves considerable time and power.
-             */
-            pClient = NimBLEDevice::getClientByPeerAddress(addr);
-            if (pClient) {
-                Serial.println("Connecting to " + String(pBLEAddr) + " - exist client");
-
-                if (pClient->isConnected()) {
-                    Serial.println("Disconnect client");
-                    pClient->disconnect();
-                    delay(100);
-                }
-
-                pClient->setConnectTimeout(timeout);
-                if (!pClient->connect(addr, false)) {
-                    Serial.println("Connect failed");
-                    assert(pClient->isConnected() == false && "IS connected!!!");
-
-                    NimBLEDevice::deleteClient(pClient);
-                    return nullptr;
-                }
-                Serial.println("Reconnected client");
-            }
-            else {
-                pClient = NimBLEDevice::getDisconnectedClient();
-            }
-        }
-
-        if (!pClient) {
-
-            if (NimBLEDevice::getClientListSize() >= NIMBLE_MAX_CONNECTIONS) {
-                Serial.println("Max clients reached - no more connections available");
-                return nullptr;
-            }
-
-            pClient = NimBLEDevice::createClient(addr);
-
-            Serial.println("Connecting to " + String(addr.toString().c_str()) + " - new client");
-            pClient->setConnectTimeout(timeout);
-            
-            if (!pClient->connect()) {
-
-                /** Created a client but failed to connect, don't need to keep it as it has no data */
-                NimBLEDevice::deleteClient(pClient);
-                Serial.println("Failed to connect, deleted client");
-                return nullptr;
-            }
-        }
-
-        if (!pClient->isConnected()) {
-            Serial.println("Connecting to " + String(pBLEAddr));
-
-            pClient->setConnectTimeout(timeout);
-            if (!pClient->connect(addr)) {
-                Serial.println("Failed to connect");
-                return nullptr;
-            }
-        }
-        return pClient;
-    }
+String MyBLEDevice::devId() const
+{
+    return utils::removeColons(m_addr.toString());
 }
 
 MyBLEDevice* MyBLEDevice::createDev(NimBLEAdvertisedDevice* pAdvertDevice)
@@ -109,9 +42,9 @@ MyBLEDevice* MyBLEDevice::createDev(NimBLEAdvertisedDevice* pAdvertDevice)
     NimBLEAddress addr = pAdvertDevice->getAddress();
 
     MyBLEDevice* device = new MyBLEDevice(1);
-    device->m_BLEAddr = String(addr.toString().c_str());
-    device->m_devId = utils::removeColons(addr.toString());
-    device->m_name = String(pAdvertDevice->getName().c_str());
+    device->m_addr = addr;
+    device->m_name = pAdvertDevice->getName();
+
     device->m_driver = pDriver;
     pDriver->attachBLEDevice(device);
 
@@ -142,17 +75,8 @@ bool MyBLEDevice::readBattLevel(NimBLEClient* pClient)
     return false;
 }
 
-bool MyBLEDevice::connectAndReadDevice()
+bool MyBLEDevice::connectAndReadDevice(NimBLEClient* pClient)
 {
-    NimBLEAddress addr(this->addr());
-    NimBLEClient* pClient = internal::connectToBLEDevice(this->addr(), g_bleConnectTimeout);
-    if (pClient == nullptr) {
-        //TODO: create some counter for failed connects...
-
-        return false;
-    }
-
-    Serial.println("Name:" + String(this->name()));
     m_rssiLevel = pClient->getRssi();
 
     if (m_hasBattery) {
@@ -168,11 +92,6 @@ bool MyBLEDevice::connectAndReadDevice()
         //TODO: handle somehow data ??
 
     }
-
-    delay(100);
-    Serial.println("Close.");    
-    pClient->disconnect();
-
     return bUpdated;
 }
 

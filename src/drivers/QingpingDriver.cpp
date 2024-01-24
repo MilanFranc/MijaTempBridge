@@ -6,6 +6,11 @@
 #include <NimBLEClient.h>
 #include <NimBLEDevice.h>
 
+static const NimBLEUUID serviceReadData = NimBLEUUID("22210000-554a-4546-5542-46534450464d");
+static BLEUUID characteristicReadData = NimBLEUUID((uint16_t)0x0100);
+
+
+
 bool QingpingDriver::isMatch(NimBLEAdvertisedDevice* pAdvertDevice)
 {
     const uint8_t addrPrefix[3] = { 0x58, 0x2d, 0x34 };
@@ -26,7 +31,7 @@ bool QingpingDriver::isMatch(NimBLEAdvertisedDevice* pAdvertDevice)
 bool QingpingDriver::readData(NimBLEClient* pClient)
 {
     NimBLEAttValue readData;
-    bool bResult = readNotifyData(pClient, NimBLEUUID("22210000-554a-4546-5542-46534450464d"), NimBLEUUID((uint16_t)0x0100), readData);
+    bool bResult = readNotifyData(pClient, serviceReadData, characteristicReadData, readData);
     if (bResult) {
         bResult = this->parseBLEData(readData.data(), readData.size());
     }
@@ -122,14 +127,14 @@ bool QingpingDriver::parseBLEData(const uint8_t* data, uint32_t size)
         return false;
     }
 
-    uint16_t temp1 = data[2] | (data[3] << 8);
+    uint16_t val1 = data[2] | (data[3] << 8);
     //Serial.println("A:" + String(temp1));
 
-    uint16_t temp2 = data[4] | (data[5] << 8);
+    uint16_t val2 = data[4] | (data[5] << 8);
     //Serial.println("A:" + String(temp2));
 
-    this->setTemp(String(temp1 / 10.0).c_str());
-    this->setHum(String(temp1 / 10.0).c_str());
+    this->setTemp(String(val1 / 10.0).c_str());
+    this->setHum(String(val2 / 10.0).c_str());
     Serial.println("T:" + String(getTemp()) + " H:" + String(getHum()));
 
     return true;

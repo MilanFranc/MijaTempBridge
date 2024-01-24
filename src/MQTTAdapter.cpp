@@ -1,24 +1,36 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <ArduinoMqttClient.h>
+#include <AsyncMqttClient.h>
 #include <ArduinoJson.h>
 
-#include "arduino_secrets.h"
-
-#include "MyBLEDevice.h"
 #include "utils.h"
+#include "version.h"
+
+static const uint16_t g_mqttKeepAliveTimeout = 15 * 60;   //15 minutes
+static const int      g_mqttNumberOfReconnectAttempts = 20;
+
+AsyncMqttClient mqttClient;
+
+void onMqttConnect(bool sessionPresent);
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason);
+//void onMqttSubscribe(uint16_t packetId, uint8_t qos);
+//void onMqttUnsubscribe(uint16_t packetId);
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total);
+//void onMqttPublish(uint16_t packetId);
+void handleMqttCmnd(const String& cmnd, const String& message);
+void sendStatusToMQTT();
+
+void onCmndGetList();
+void onCmndScanDev();
 
 
-WiFiClient wifiClient;
-MqttClient mqttClient(wifiClient);
-
-const char broker[] = MQTT_BROKER_ADDR;
-int        port     = 1883;
 const char topicPrefix[]  = "MiTemp/";
 const char topicType[]  = "data";
 
 static String g_wifiMacAddrString;
+static String g_willTopic;
+
 
 namespace internal {
 
@@ -30,38 +42,41 @@ String getMqttDeviceId()
 } //namespace internal
 
 
-
-bool connectToMQTT()
+void setupMqtt(const char* mqtt_broker, uint16_t mqtt_port)
 {
-    // You can provide a unique client ID, if not set the library uses Arduino-millis()
-    // Each client must have a unique client ID
-    // mqttClient.setId("clientId");
+    mqttClient.onConnect(onMqttConnect);
+    mqttClient.onDisconnect(onMqttDisconnect);
+    //mqttClient.onSubscribe(onMqttSubscribe);
+    //mqttClient.onUnsubscribe(onMqttUnsubscribe);
+    mqttClient.onMessage(onMqttMessage);
+    //mqttClient.onPublish(onMqttPublish);
+    mqttClient.setKeepAlive(g_mqttKeepAliveTimeout);
+    mqttClient.setServer(mqtt_broker, mqtt_port);
+}
 
-    // You can provide a username and password for authentication
-    // mqttClient.setUsernamePassword("username", "password");
-
+bool connectToMqtt()
+{
     if (!mqttClient.connected()) {
 
-        g_wifiMacAddrString = utils::getMacAddrString();        
+        if (g_wifiMacAddrString.isEmpty()) {
+            g_wifiMacAddrString = utils::getMacAddrString();
 
-        Serial.print("Connect to the MQTT broker: ");
-        Serial.println(broker);
-
-        if (!mqttClient.connect(broker, port)) {
-            Serial.print("MQTT connection failed! Error code = ");
-            Serial.println(mqttClient.connectError());
-            return false;
+            //Setup LWT topic
+            g_willTopic = "tele/" + internal::getMqttDeviceId() + "/LWT";
+            mqttClient.setWill(g_willTopic.c_str(), 1, true, "Offline");
         }
 
-        Serial.println("Connected to the MQTT broker!");
-        Serial.println();
-    }
-    else {
-        Serial.println("Still connected to the MQTT broker!");
+        Serial.println("Connecting to MQTT...");
+        mqttClient.connect();
+
+        for(int i = 0; i < g_mqttNumberOfReconnectAttempts && !mqttClient.connected(); i++) {
+            delay(100);
+        }
     }
 
-    return true;
+    return mqttClient.connected();
 }
+
 
 void sendStatusOnlineMsg()
 {
@@ -69,39 +84,131 @@ void sendStatusOnlineMsg()
     String payload = "Online";
 
     // send message, the Print interface can be used to set the message contents
-    mqttClient.beginMessage(topic, static_cast<unsigned long>(payload.length()));
-    mqttClient.print(payload);
-    mqttClient.endMessage();
+    mqttClient.publish(topic.c_str(), 0, true, payload.c_str(), payload.length());
 }
 
-void sendMiTempDataToMQTT(MyBLEDevice* pDev)
-{
-    String jsonData = pDev->getData();
 
+void sendDiscoveryToMQTT()
+{
+    StaticJsonDocument<200> doc;
+
+    doc["ip"]  = WiFi.localIP().toString();
+    doc["dn"]  = "BLE-Bridge";
+    doc["mac"] = g_wifiMacAddrString;
+    doc["sw"]  = String(APP_VERSION);
+    doc["bd"]  = String(APP_BUILD_DATE);
+    doc["n"]   = internal::getMqttDeviceId();
+
+    String jsonData;
+    serializeJson(doc, jsonData);
+
+    String topic = "blebridge/discovery/";
+    topic += g_wifiMacAddrString;
+    topic += "/config";
+
+    Serial.print("MQTT message: ");
+    Serial.println(topic);  
+
+    Serial.print("data:");
+    Serial.println(jsonData);
+
+    mqttClient.publish(topic.c_str(), 0, true, jsonData.c_str(), jsonData.length());
+}
+
+
+// Tasmota sensor MQTT topic
+//  tele/%topic%/SENSOR = {"Time":"2020-03-24T12:47:51",
+//                          "LYWSD03-52680f":{"Temperature":21.1,"Humidity":58.0,"DewPoint":12.5,"Battery":100},
+//                          "LYWSD02-a2fd09":{"Temperature":21.4,"Humidity":57.0,"DewPoint":12.5,"Battery":2},
+//                          "MJ_HT_V1-d8799d":{"Temperature":21.4,"Humidity":54.6,"DewPoint":11.9},
+//                          "TempUnit":"C"}
+
+
+void sendSensorDataToMQTT(const String& devId, const String& jsonMessage)
+{
     String topic = topicPrefix;
-    topic += pDev->devId();
+    topic += devId;
     topic += "/";
     topic += topicType;
 
-    Serial.print("MQTT topic: ");
+    Serial.print("Sending message to topic: ");
     Serial.println(topic);        
-    Serial.print("MQTT data:");
-    Serial.println(jsonData);
 
-    // send message, the Print interface can be used to set the message contents
-    mqttClient.beginMessage(topic, static_cast<unsigned long>(jsonData.length()));
+    Serial.print("data:");
+    Serial.println(jsonMessage);
 
-    mqttClient.print(jsonData);
-    mqttClient.endMessage();
+// Disable for now...
+//    mqttClient.publish(topic.c_str(), 0, false, jsonMessage.c_str(), jsonMessage.length());
 }
 
-void pollMQTT()
+void onMqttConnect(bool sessionPresent) 
 {
-    mqttClient.poll();
+    Serial.println("Connected to MQTT.");
+    Serial.print("Session present: ");
+    Serial.println(sessionPresent);
+
+
+    //TODO: subscribe on discovery topic...
+    //      read config (maybe not good idea)
+    //      apply config and start sensors scan
+
+    String topic = "cmnd/";
+    topic += internal::getMqttDeviceId();
+    topic += "/#";
+    mqttClient.subscribe(topic.c_str(), 2);  //TODO: why 2?
+
+    mqttClient.publish(g_willTopic.c_str(), 0, true, "Online");
+
+    sendDiscoveryToMQTT();
 }
 
-void flushMQTT()
+void onMqttDisconnect(AsyncMqttClientDisconnectReason reason)
 {
-    mqttClient.flush();
+    Serial.println("Disconnected from MQTT.");
+
+    //TODO:
+
 }
 
+void onMqttMessage(char* topic, char* payload, AsyncMqttClientMessageProperties properties, size_t len, size_t index, size_t total)
+{
+    Serial.println("Publish received.");
+    Serial.print("  topic: ");
+    Serial.println(topic);
+    Serial.print("  len: ");
+    Serial.println(len);
+    Serial.print("  index: ");
+    Serial.println(index);
+    Serial.print("  total: ");
+    Serial.println(total);
+
+    String front = utils::getStringFrontItem(topic, '/');
+    if (front == "cmnd") {
+        String cmnd = utils::getStringBackItem(topic, '/');
+        if (cmnd == "getList") {
+            onCmndGetList();
+        }
+        else if (cmnd == "scanDev") {
+            onCmndScanDev();
+        }
+    }
+}
+
+void onCmndGetList()
+{
+    Serial.println("Cmnd: GetList..");
+
+
+
+
+}
+
+void onCmndScanDev()
+{
+    Serial.println("Cmnd: ScanDev..");
+
+
+
+
+
+}

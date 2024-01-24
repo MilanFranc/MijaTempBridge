@@ -5,6 +5,13 @@
 #include <NimBLEDevice.h>
 
 
+static const NimBLEUUID serviceReadTemperature = NimBLEUUID("00002234-4ae7-44c4-b235-b75e375084b8");
+static const NimBLEUUID characteristicReadTemperature = NimBLEUUID("00002235-4ae7-44c4-b235-b75e375084b8");
+
+static const NimBLEUUID serviceReadHumidity = NimBLEUUID("00001234-4ae7-44c4-b235-b75e375084b8");
+static const NimBLEUUID characteristicReadHumidity = NimBLEUUID("00001235-4ae7-44c4-b235-b75e375084b8");
+
+
 namespace internal {
 
 bool BLEValueToFloat(NimBLEAttValue& value, float& fReadValue)
@@ -33,7 +40,7 @@ bool ThermoBlueDriver::readData(NimBLEClient* pClient)
     NimBLEAttValue dataBuffer;
 
     //Temperature
-    bRet = readNotifyData(pClient, NimBLEUUID("00002234-4ae7-44c4-b235-b75e375084b8"), NimBLEUUID("00002235-4ae7-44c4-b235-b75e375084b8"), dataBuffer);
+    bRet = readNotifyData(pClient, serviceReadTemperature, characteristicReadTemperature, dataBuffer);
     if (bRet) {
         float fValue;
         if (internal::BLEValueToFloat(dataBuffer, fValue)) {
@@ -48,7 +55,7 @@ bool ThermoBlueDriver::readData(NimBLEClient* pClient)
     }
 
     //Humidity
-    bRet = readNotifyData(pClient, NimBLEUUID("00001234-4ae7-44c4-b235-b75e375084b8"), NimBLEUUID("00001235-4ae7-44c4-b235-b75e375084b8"), dataBuffer);
+    bRet = readNotifyData(pClient, serviceReadHumidity, characteristicReadHumidity, dataBuffer);
     if (bRet) {
         float fValue;
         if (internal::BLEValueToFloat(dataBuffer, fValue)) {
@@ -61,44 +68,6 @@ bool ThermoBlueDriver::readData(NimBLEClient* pClient)
             this->setHum("");
         }
     }
-
-#if 0
-    {
-        NimBLERemoteService* pService = pClient->getService(NimBLEUUID("00002234-4ae7-44c4-b235-b75e375084b8"));
-        if (pService != nullptr) {
-            NimBLERemoteCharacteristic* pChar = pService->getCharacteristic(NimBLEUUID("00002235-4ae7-44c4-b235-b75e375084b8"));    //   
-            if (pChar != nullptr) {
-                NimBLEAttValue value = pChar->getValue();   //Temperature
-                float fValue;
-                if (internal::BLEValueToFloat(value, fValue)) {
-                    Serial.println("T:" + String(fValue));
-                    this->setTemp(String(fValue).c_str());
-                }
-                else {
-                    this->setTemp("");
-                }
-            }
-        }
-    }
-
-    {
-        NimBLERemoteService* pService = pClient->getService(NimBLEUUID("00001234-4ae7-44c4-b235-b75e375084b8"));
-        if (pService != nullptr) {
-            NimBLERemoteCharacteristic* pChar = pService->getCharacteristic(NimBLEUUID("00001235-4ae7-44c4-b235-b75e375084b8"));    //   
-            if (pChar != nullptr) {
-                NimBLEAttValue value = pChar->getValue();   //Humidity
-                float fValue;
-                if (internal::BLEValueToFloat(value, fValue)) {
-                    Serial.println("H:" + String(fValue));
-                    this->setHum(String(fValue).c_str());
-                }
-                else {
-                    this->setHum("");
-                }
-            }
-        }
-    }
-#endif    
 
     bool bResult = (this->isTempSet() && this->isHumSet());
     return bResult;

@@ -44,6 +44,32 @@ String removeColons(const std::string& addr)
 
 
 
+String getStringFrontItem(const String& topic, char delim)
+{
+    String result;
+    int idx = topic.indexOf(delim);
+    if (idx != -1) {
+        result = topic.substring(0, idx);
+    }
+    return result;
+}
+
+String getStringBackItem(const String& topic, char delim)
+{
+    String result;
+    int idx = topic.lastIndexOf(delim);
+    if (idx != -1) {
+        result = topic.substring(idx + 1);
+    }
+    return result;
+}
+
+String stdStringToStr(const std::string& str)
+{
+    return String(str.c_str(), str.size());
+}
+
+
 
 
 }

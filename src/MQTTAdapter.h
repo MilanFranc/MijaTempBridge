@@ -1,15 +1,13 @@
 #ifndef MQTT_ADAPTER_H
 #define MQTT_ADAPTER_H
 
-class MyBLEDevice;
+#include <Arduino.h>
 
-bool connectToMQTT();
 
-void sendStatusOnlineMsg();
-void sendMiTempDataToMQTT(MyBLEDevice* pDev);
+void setupMqtt(const char* mqtt_broker, uint16_t mqtt_port);
+bool connectToMqtt();
 
-void pollMQTT();
-void flushMQTT();
+void sendSensorDataToMQTT(const String& devId, const String& jsonMessage);
 
 
 #endif //MQTT_ADAPTER_H
