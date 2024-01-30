@@ -56,6 +56,7 @@ MyBLEDevice* MyBLEDevice::createDev(NimBLEAdvertisedDevice* pAdvertDevice)
 
 MyBLEDevice::MyBLEDevice(int devType)
     : m_hasBattery(false), m_batteryLevel(0), m_rssiLevel(0), m_driver(nullptr)
+    , m_connectCount(0), m_failedConnectCount(0)
 {
 }
 

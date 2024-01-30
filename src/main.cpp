@@ -14,8 +14,8 @@
 #include <ArduinoQueue.h>
 #include <SoftTimers.h>
 #include <ArduinoJson.h>
-#include <FS.h>
-#include <LittleFS.h>
+//#include <FS.h>
+//#include <LittleFS.h>
 
 #include <freertos/task.h>
 
@@ -161,7 +161,7 @@ void deinitBLEDev()
     NimBLEDevice::deinit(true);
 }
 
-bool connectToWifiAndMQTT()
+bool connectToWifiAndMQTT(uint16_t numberOfAttempts)
 {
     if (WiFi.status() != WL_CONNECTED) {
 
@@ -171,7 +171,7 @@ bool connectToWifiAndMQTT()
         Serial.print("Attempting to connect to WPA SSID: ");
         Serial.println(ssid);
     
-        for(int i = 0; i < g_maxNumberOfConnectAttempts; i++) {
+        for(uint16_t i = 0; i < numberOfAttempts; i++) {
             if (WiFi.status() == WL_CONNECTED) {
                 break;
             }
@@ -195,21 +195,6 @@ bool connectToWifiAndMQTT()
     return connectToMqtt();
 }
 
-void turnOffWifi()
-{
-
-#if 0    
-    if (WiFi.getMode() != WIFI_OFF) {
-        Serial.println("WiFi disconnect");
-        if (!WiFi.disconnect(true)) {
-            Serial.println("WiFi disconnect failed!!");
-        }
-        delay(100);
-        WiFi.mode(WIFI_OFF);
-    }
-#endif
-
-}
 
 //void setupScanDev()
 //{
@@ -273,26 +258,25 @@ void InitState4();
 void UpdateState4();
 
 
-void setup() {
+void setup()
+{
     Serial.begin(115200);
-    while(!Serial) { delay(500); }
-
-    Serial1.begin(115200);
-    while(!Serial1) { delay(500); }
+    while(!Serial) { delay(10); }
 
     Serial.println("Starting BLE Bridge ver:" APP_VERSION " Build:" APP_BUILD_DATE);
-    Serial1.println("Starting BLE Bridge ver:" APP_VERSION " Build:" APP_BUILD_DATE);
 
     setupMqtt(mqtt_broker, mqtt_port);
 
     bleDeviceScanTimer.setTimeOutTime(nDevicesRefreshTime);
     bleDataScanTimer.setTimeOutTime(nDataRefreshTime);
 
+#if 0    
     // check file system exists
     if (!LittleFS.begin(true)) {
         Serial.println("LittleFS failed.");
         while(true) {};
     }
+#endif    
 
     InitState0();
 }
@@ -303,7 +287,7 @@ void InitState0()
 {
     nCurrentState = 0;
     WiFi.mode(WIFI_STA);
-    if (!connectToWifiAndMQTT()) {
+    if (!connectToWifiAndMQTT(g_maxNumberOfConnectAttempts)) {
         Serial.println("Unable to connect to wifi.");
         delay(g_timeToRestartAfterConnectionFailed);
 
@@ -311,9 +295,6 @@ void InitState0()
     }
 
     delay(500);
-
-    turnOffWifi();
-    delay(500);    
 
     InitState1();
 }
@@ -336,7 +317,24 @@ void onDeviceFound(NimBLEAdvertisedDevice* pDevice)
         //TODO:
         //Convert myDevicesList to ...
         //Write dev list to file
+        Serial.println("Found:" + String(myDevices.size()) + " devices.");
 
+        StaticJsonDocument<400> doc;
+        JsonArray dataArray = doc.createNestedArray();
+
+        for(size_t i = 0; i < myDevices.size(); i++) {
+            MyBLEDevice* pDev = myDevices.deviceAt(i);
+
+            JsonObject obj = dataArray.createNestedObject();
+            obj["mac"] = pDev->addr();
+            obj["con"] = pDev->connectCount();
+            obj["fail"] = pDev->failedConnectCount();
+        }
+
+        String jsonData;
+        serializeJson(dataArray, jsonData);
+
+        sendSensorsListToMQTT(jsonData);
 
         InitState2();
         return;
@@ -349,8 +347,6 @@ void onDeviceFound(NimBLEAdvertisedDevice* pDevice)
 void InitState1()
 {
     nCurrentState = 1;
-    turnOffWifi();
-    delay(200);
 
     initBLEDev();
     delay(200);
@@ -370,8 +366,6 @@ static int nUpdateListEmptyCounter = 0;
 void InitState2()
 {
     nCurrentState = 2;
-    turnOffWifi();
-    delay(200);
 
     initBLEDev();
     vTaskDelay(500 / portTICK_PERIOD_MS);
@@ -381,7 +375,7 @@ void UpdateState2()
 {
     Serial.println("State: Read sensors data");
 
-    if (myDevices.deviceCount() == 0) {
+    if (myDevices.size() == 0) {
         Serial.println("Device list is empty!");      
         InitState1();
         return;
@@ -418,8 +412,7 @@ void InitState3()
     deinitBLEDev();
     delay(2000);
 
-    WiFi.mode(WIFI_STA);
-    if (connectToWifiAndMQTT()) {
+    if (connectToWifiAndMQTT(g_maxNumberOfConnectAttempts)) {
 
         delay(50);
     }
@@ -488,7 +481,7 @@ void InitState5()
 
 #if 0
     WiFi.mode(WIFI_STA);
-    if (connectToWifiAndMQTT()) {
+    if (connectToWifiAndMQTT(g_maxNumberOfConnectAttempts)) {
         enterModemSleep(20000);
 
 
@@ -532,6 +525,9 @@ void loop()
     }
 
     //TODO: ArduinoOTA.handle();
+
+
+
 
 #if 0
     unsigned long sleepTime = 30 * 1000;  //default sleep time

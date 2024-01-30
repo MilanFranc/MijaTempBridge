@@ -22,10 +22,11 @@ String getMacAddrString()
     WiFi.macAddress(macAddr);
 
     String strMacAddr;
-    for(int i = 0; i < 6; i++) {
+    for(int i = 0; i < WL_MAC_ADDR_LENGTH; i++) {
         strMacAddr.concat(String(macAddr[i] >> 4, HEX));
         strMacAddr.concat(String(macAddr[i] & 0x0f, HEX));
-    }    
+    }
+    strMacAddr.toUpperCase();
     return strMacAddr;
 }
 

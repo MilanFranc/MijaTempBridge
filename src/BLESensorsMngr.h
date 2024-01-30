@@ -12,7 +12,8 @@ class BLESensorsMngr
 {
 public:
     BLESensorsMngr();
-    size_t deviceCount() const { return myDevicesList.size(); }
+    size_t size() const { return myDevicesList.size(); }
+    MyBLEDevice* deviceAt(size_t index) const;
 
     void onDeviceFound(NimBLEAdvertisedDevice* pDevice);
 

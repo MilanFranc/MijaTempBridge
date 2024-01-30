@@ -115,6 +115,21 @@ void sendDiscoveryToMQTT()
     mqttClient.publish(topic.c_str(), 0, true, jsonData.c_str(), jsonData.length());
 }
 
+void sendSensorsListToMQTT(const String& sensorsList)
+{
+    String topic = "blebridge/discovery/";
+    topic += g_wifiMacAddrString;
+    topic += "/sensors";
+
+    Serial.print("MQTT message: ");
+    Serial.println(topic);  
+
+    Serial.print("data:");
+    Serial.println(sensorsList);
+
+    mqttClient.publish(topic.c_str(), 0, true, sensorsList.c_str(), sensorsList.length());
+}
+
 
 // Tasmota sensor MQTT topic
 //  tele/%topic%/SENSOR = {"Time":"2020-03-24T12:47:51",
@@ -137,8 +152,7 @@ void sendSensorDataToMQTT(const String& devId, const String& jsonMessage)
     Serial.print("data:");
     Serial.println(jsonMessage);
 
-// Disable for now...
-//    mqttClient.publish(topic.c_str(), 0, false, jsonMessage.c_str(), jsonMessage.length());
+    mqttClient.publish(topic.c_str(), 0, false, jsonMessage.c_str(), jsonMessage.length());
 }
 
 void onMqttConnect(bool sessionPresent) 

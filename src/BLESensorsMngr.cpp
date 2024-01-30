@@ -86,6 +86,14 @@ BLESensorsMngr::BLESensorsMngr()
 {
 }
 
+MyBLEDevice* BLESensorsMngr::deviceAt(size_t index) const
+{
+    if (index >= myDevicesList.size()) {
+        return nullptr;
+    }
+    return myDevicesList[index];
+}
+
 MyBLEDevice* BLESensorsMngr::findAdvDeviceInList(const NimBLEAddress& devAddress)
 {
     for (MyBLEDevice* item : myDevicesList) {
@@ -125,11 +133,12 @@ int BLESensorsMngr::connectAndReadData(ArduinoQueue<MyBLEDevice*>& updateQueue)
         NimBLEClient* pClient = internal::connectToBLEDevice(pDev->native_addr(), g_bleConnectTimeout);
         if (pClient == nullptr) {
             //TODO: create some counter for failed connects...
-
+            pDev->incFailedCount();
             return false;
         }
 
         Serial.println("Name:" + utils::stdStringToStr(pDev->name()) );
+        pDev->incConnectCount();
 
         //TODO: add check for device if it doesn't respond..
         if (pDev->connectAndReadDevice(pClient)) {

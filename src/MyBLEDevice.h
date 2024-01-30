@@ -26,6 +26,12 @@ public:
 
     String getData();
 
+    uint16_t connectCount() const { return m_connectCount; }
+    uint16_t failedConnectCount() const { return m_failedConnectCount; }
+
+    void incConnectCount() { m_connectCount++; }
+    void incFailedCount() { m_failedConnectCount++; }
+
 private:
     MyBLEDevice(int devType);
 
@@ -37,6 +43,9 @@ private:
     int16_t m_batteryLevel;
     int16_t m_rssiLevel;
     DevDriver* m_driver;
+
+    uint16_t  m_connectCount;
+    uint16_t  m_failedConnectCount;
 
 };
 
