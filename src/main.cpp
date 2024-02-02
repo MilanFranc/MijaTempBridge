@@ -319,20 +319,21 @@ void onDeviceFound(NimBLEAdvertisedDevice* pDevice)
         //Write dev list to file
         Serial.println("Found:" + String(myDevices.size()) + " devices.");
 
-        StaticJsonDocument<400> doc;
-        JsonArray dataArray = doc.createNestedArray();
+        JsonDocument doc;
+        JsonArray arr = doc.to<JsonArray>();
 
         for(size_t i = 0; i < myDevices.size(); i++) {
             MyBLEDevice* pDev = myDevices.deviceAt(i);
+            assert(pDev != nullptr);
 
-            JsonObject obj = dataArray.createNestedObject();
+            JsonObject obj = arr.add<JsonObject>();
             obj["mac"] = pDev->addr();
             obj["con"] = pDev->connectCount();
             obj["fail"] = pDev->failedConnectCount();
         }
 
         String jsonData;
-        serializeJson(dataArray, jsonData);
+        serializeJson(doc, jsonData);
 
         sendSensorsListToMQTT(jsonData);
 

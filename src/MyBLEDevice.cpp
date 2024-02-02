@@ -102,7 +102,7 @@ String MyBLEDevice::getData()
         return String();
     }
 
-    StaticJsonDocument<200> doc;
+    JsonDocument doc;
 
     //TODO: sensor data...
     doc["temp"] = m_driver->getTemp();

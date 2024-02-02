@@ -80,7 +80,7 @@ bool readNotifyData(NimBLEClient* pClient, const NimBLEUUID& service, const NimB
                                                 std::placeholders::_2,
                                                 std::placeholders::_3,
                                                 std::placeholders::_4), true);
-            for(int i = 0; i < 40; i++) {
+            for(int i = 0; i < 50; i++) {
                 if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100)) != pdFALSE) {
                     break;
                 }

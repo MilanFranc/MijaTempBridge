@@ -90,7 +90,7 @@ void sendStatusOnlineMsg()
 
 void sendDiscoveryToMQTT()
 {
-    StaticJsonDocument<200> doc;
+    JsonDocument doc;
 
     doc["ip"]  = WiFi.localIP().toString();
     doc["dn"]  = "BLE-Bridge";
