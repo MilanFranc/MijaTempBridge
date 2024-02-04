@@ -134,7 +134,9 @@ int BLESensorsMngr::connectAndReadData(ArduinoQueue<MyBLEDevice*>& updateQueue)
         if (pClient == nullptr) {
             //TODO: create some counter for failed connects...
             pDev->incFailedCount();
-            return false;
+
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            continue;
         }
 
         Serial.println("Name:" + utils::stdStringToStr(pDev->name()) );
