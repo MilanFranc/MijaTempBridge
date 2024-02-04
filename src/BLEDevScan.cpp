@@ -15,6 +15,19 @@ static bool g_bInitialized = false;
 static TonDeviceFoundCB g_onDeviceFoundCB = nullptr;
 
 
+//void setupScanDev()
+//{
+//    pBLEScan = NimBLEDevice::getScan(); //create new scan
+//    // Set the callback for when devices are discovered, no duplicates.
+//    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks(), false);
+//    pBLEScan->setActiveScan(true); // Set active scanning, this will get more data from the advertiser.
+//    pBLEScan->setInterval(97); // How often the scan occurs / switches channels; in milliseconds,
+//    pBLEScan->setWindow(37);  // How long to scan during the interval; in milliseconds.
+//    pBLEScan->setMaxResults(0); // do not store the scan results, use callback only.
+//  
+//}
+
+
 /** Define a class to handle the callbacks when advertisments are received */
 class AdvertisedDeviceCallbacks : public NimBLEAdvertisedDeviceCallbacks 
 {
@@ -77,11 +90,10 @@ void startBLEDevicesScan(uint32_t scanTime, TonDeviceFoundCB deviceFoundCB)
         pScan->setActiveScan(true);
         g_bInitialized = true;
     }
-    else {
-        pScan->clearResults();
-    }
 
     g_onDeviceFoundCB = deviceFoundCB;
+    pScan->clearDuplicateCache();
+    pScan->clearResults();
 
     /** Start scanning for advertisers for the scan time specified (in seconds) 0 = forever
      *  Optional callback for when scanning stops.
@@ -90,4 +102,15 @@ void startBLEDevicesScan(uint32_t scanTime, TonDeviceFoundCB deviceFoundCB)
     pScan->start(scanTime, scanEndedCB);
 }
 
+void clearBLEScanData()
+{
+    if (!g_bInitialized) {
+        return;
+    }
 
+    NimBLEScan* pScan = NimBLEDevice::getScan();
+    if (pScan) {
+        pScan->clearDuplicateCache();
+        pScan->clearResults();
+    }
+}

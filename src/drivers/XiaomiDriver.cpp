@@ -7,6 +7,16 @@
 
 #include <ArduinoJson.h>
 
+/**
+ * Mija temperature and humidity
+ * 
+ *  uuid_characteristic_temperature_fine    = UUID("00002a6e-0000-1000-8000-00805f9b34fb") #handle 21
+ *  uuid_characteristic_temperature_coarse  = UUID("00002a1f-0000-1000-8000-00805f9b34fb") #handle 18
+ *  uuid_characteristic_humidity            = UUID("00002a6f-0000-1000-8000-00805f9b34fb") #handle 24
+ *  uuid_characteristic_battery             = UUID("00002a19-0000-1000-8000-00805f9b34fb") #handle 14
+ * 
+ */
+
 bool XiaomiDriver::isMatch(NimBLEAdvertisedDevice* pAdvertDevice)
 {
     const uint8_t addrPrefix[3] = { 0x58, 0x2d, 0x34 };

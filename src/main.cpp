@@ -1,23 +1,19 @@
 
-
-/** 
- *
- *  Demonstrates many of the available features of the NimBLE client library.
- *
- *
-*/
-
-#define FS_NO_GLOBALS
-
 #include <NimBLEDevice.h>
 
 #include <ArduinoQueue.h>
-#include <SoftTimers.h>
 #include <ArduinoJson.h>
-//#include <FS.h>
-//#include <LittleFS.h>
+#include <NTPClient.h>
 
-#include <freertos/task.h>
+// Time library: // https://github.com/PaulStoffregen/Time
+#include <TimeLib.h>
+
+
+#define _TASK_SLEEP_ON_IDLE_RUN
+#define _TASK_STATUS_REQUEST
+#include <TaskScheduler.h>
+
+//#include <freertos/task.h>
 
 
 #if defined(ARDUINO_SAMD_MKRWIFI1010) || defined(ARDUINO_SAMD_NANO_33_IOT) || defined(ARDUINO_AVR_UNO_WIFI_REV2)
@@ -49,37 +45,26 @@ char pass[] = SECRET_PASS;    // your network password (use for WPA, or use as k
 const char mqtt_broker[] = MQTT_BROKER_ADDR;
 int        mqtt_port     = 1883;
 
-#define BLE_DEVICES_LIST  "/BLEDevList1"
+//const char* ntpServerName = "time.nist.gov";
+//const char* ntpServerName = "pool.ntp.org";
+const char* ntpServerName = "time.google.com";
 
-/**
- * Mija temperature and humidity
- * 
- *  uuid_characteristic_temperature_fine    = UUID("00002a6e-0000-1000-8000-00805f9b34fb") #handle 21
- *  uuid_characteristic_temperature_coarse  = UUID("00002a1f-0000-1000-8000-00805f9b34fb") #handle 18
- *  uuid_characteristic_humidity            = UUID("00002a6f-0000-1000-8000-00805f9b34fb") #handle 24
- *  uuid_characteristic_battery             = UUID("00002a19-0000-1000-8000-00805f9b34fb") #handle 14
- * 
- */
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, ntpServerName);
+
+
+
+#define BLE_DEVICES_LIST  "/BLEDevList1"
 
 NimBLEScan* pBLEScan = NULL;
 
-SoftTimer bleDeviceScanTimer;
-SoftTimer bleDataScanTimer;
-
-const unsigned long nDataRefreshTime = 15 * 60 * 1000;  // 15 minutes
-const unsigned long nDevicesRefreshTime = 4 * 60 * 60 * 1000;   //4 hours
+const unsigned long nDataRefreshTime = 15 * TASK_MINUTE;  // 15 minutes
+const unsigned long nDevicesRefreshTime = 4 * 60 * TASK_MINUTE;   //4 hours
+const unsigned long nRescanDevicesTime = 15 * TASK_MINUTE;   //15 minutes
 const int nDeviceScanTimeout = 90; //seconds
 
-
-const int STATE_IDLE = 0;
-const int STATE_READ_BLE_DATA = 1;
-const int STATE_CONNECT_WIFI_AND_MQTT = 2;
-const int STATE_SEND_MQTT_DATA = 3;
-const int STATE_DISCONNECT_WIFI = 4;
-
-int nCurrentState = STATE_IDLE;
-
 int count = 0;
+bool isBLEScanInProgress = false;
 
 ArduinoQueue<MyBLEDevice*> myUpdateList(30);
 
@@ -87,6 +72,22 @@ BLESensorsMngr myDevices;
 
 const int g_maxNumberOfConnectAttempts = 20;
 const uint32_t g_timeToRestartAfterConnectionFailed = 5 * 60 * 1000;
+
+void taskScanBLEDevices();
+void taskScanBLECompleted();
+void taskReadDataFromDevices();
+void taskReportData();
+
+bool onEnableReadDataFromDevices();
+
+Scheduler ts;
+
+Task tScanBLEDevices(nDevicesRefreshTime, TASK_FOREVER, &taskScanBLEDevices, &ts);
+Task tScanBLECompleted(&taskScanBLECompleted, &ts);
+Task tReadData(nDataRefreshTime, TASK_FOREVER, &taskReadDataFromDevices, &ts, false, &onEnableReadDataFromDevices);
+Task tReportData(&taskReportData, &ts);
+
+StatusRequest sScanDone;
 
 
 /////////////////////////////////////////////////////////////////////
@@ -150,7 +151,8 @@ void initBLEDev()
     //NimBLEDevice::setSecurityAuth(false, false, true);
     NimBLEDevice::setSecurityAuth(/*BLE_SM_PAIR_AUTHREQ_BOND | BLE_SM_PAIR_AUTHREQ_MITM |*/ BLE_SM_PAIR_AUTHREQ_SC);
 #endif
-  
+
+    Serial.println("initBLEDev");  
 }
 
 void deinitBLEDev()
@@ -158,7 +160,9 @@ void deinitBLEDev()
     if (!NimBLEDevice::getInitialized())
         return;
 
+    clearBLEScanData();
     NimBLEDevice::deinit(true);
+    Serial.println("deinitBLEDev");
 }
 
 bool connectToWifiAndMQTT(uint16_t numberOfAttempts)
@@ -196,67 +200,35 @@ bool connectToWifiAndMQTT(uint16_t numberOfAttempts)
 }
 
 
-//void setupScanDev()
-//{
-//    pBLEScan = NimBLEDevice::getScan(); //create new scan
-//    // Set the callback for when devices are discovered, no duplicates.
-//    pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks(), false);
-//    pBLEScan->setActiveScan(true); // Set active scanning, this will get more data from the advertiser.
-//    pBLEScan->setInterval(97); // How often the scan occurs / switches channels; in milliseconds,
-//    pBLEScan->setWindow(37);  // How long to scan during the interval; in milliseconds.
-//    pBLEScan->setMaxResults(0); // do not store the scan results, use callback only.
-//  
-//}
 
-
-static uint32_t g_oldCPUFrequency = 0; //
-
-void setupModemSleep()
+void reportBLEDevicesToMQTT()
 {
-    assert(WiFi.getMode() != WIFI_OFF);
-    WiFi.setSleep(true);
-    g_oldCPUFrequency = getCpuFrequencyMhz();
-    if (!setCpuFrequencyMhz(40)){
-        Serial2.println("Not valid frequency!");
-    }
-    // Use this if 40Mhz is not supported
-    // setCpuFrequencyMhz(80);
-    delay(10);    
-}
+    JsonDocument doc;
+    JsonArray arr = doc.to<JsonArray>();
 
-void resumeModemSleep() {
-    assert(g_oldCPUFrequency != 0);
-    setCpuFrequencyMhz(g_oldCPUFrequency);
-    delay(10);
-    WiFi.setSleep(false);
-}
+    for(size_t i = 0; i < myDevices.size(); i++) {
+        MyBLEDevice* pDev = myDevices.deviceAt(i);
+        assert(pDev != nullptr);
 
-void enterModemSleep(unsigned long period)
-{
-    setupModemSleep();
-
-    unsigned long startLoop = millis();
-    for(;;) {
-        if ((startLoop + period) < millis())
-            break;
+        JsonObject obj = arr.add<JsonObject>();
+        obj["mac"] = pDev->addr();
+//        obj["con"] = pDev->connectCount();
+//        obj["fail"] = pDev->failedConnectCount();
     }
 
-    resumeModemSleep();
+    String jsonData;
+    serializeJson(doc, jsonData);
+
+    sendSensorsListToMQTT(jsonData);
+}
+
+time_t NTPTimeProvider()
+{
+    timeClient.update();
+    return timeClient.getEpochTime();
 }
 
 /////////////////////////////////////////////////////////////////////////////////////
-
-void InitState0();
-void UpdateState0();
-void InitState1();
-void UpdateState1();
-void InitState2();
-void UpdateState2();
-void InitState3();
-void UpdateState3();
-void InitState4();
-void UpdateState4();
-
 
 void setup()
 {
@@ -267,25 +239,6 @@ void setup()
 
     setupMqtt(mqtt_broker, mqtt_port);
 
-    bleDeviceScanTimer.setTimeOutTime(nDevicesRefreshTime);
-    bleDataScanTimer.setTimeOutTime(nDataRefreshTime);
-
-#if 0    
-    // check file system exists
-    if (!LittleFS.begin(true)) {
-        Serial.println("LittleFS failed.");
-        while(true) {};
-    }
-#endif    
-
-    InitState0();
-}
-
-///////////////////////////////////////
-
-void InitState0()
-{
-    nCurrentState = 0;
     WiFi.mode(WIFI_STA);
     if (!connectToWifiAndMQTT(g_maxNumberOfConnectAttempts)) {
         Serial.println("Unable to connect to wifi.");
@@ -296,334 +249,152 @@ void InitState0()
 
     delay(500);
 
-    InitState1();
-}
+    timeClient.begin();
+    timeClient.update();
 
-void UpdateState0()
-{
-    //nothing
+    //TimeLib.h
+    setSyncProvider(NTPTimeProvider);    
+
+    tScanBLEDevices.enableDelayed(100);  //Start BLE Scan
 }
 
 ///////////////////////////////////////
 //TODO: what about devices that are not found ?
 
 
-
 void onDeviceFound(NimBLEAdvertisedDevice* pDevice)
 {
     if (pDevice == nullptr) {   //Scan end
-        bleDeviceScanTimer.reset();
 
         //TODO:
         //Convert myDevicesList to ...
         //Write dev list to file
         Serial.println("Found:" + String(myDevices.size()) + " devices.");
 
-        JsonDocument doc;
-        JsonArray arr = doc.to<JsonArray>();
+        if (myDevices.size() > 0) {
 
-        for(size_t i = 0; i < myDevices.size(); i++) {
-            MyBLEDevice* pDev = myDevices.deviceAt(i);
-            assert(pDev != nullptr);
-
-            JsonObject obj = arr.add<JsonObject>();
-            obj["mac"] = pDev->addr();
-            obj["con"] = pDev->connectCount();
-            obj["fail"] = pDev->failedConnectCount();
+            sScanDone.signalComplete(0);  //Status OK
         }
-
-        String jsonData;
-        serializeJson(doc, jsonData);
-
-        sendSensorsListToMQTT(jsonData);
-
-        InitState2();
-        return;
+        else {
+            sScanDone.signalComplete(-1); //Status Devices not found.
+        }
     }
     else {
         myDevices.onDeviceFound(pDevice);
     }
 }
 
-void InitState1()
+void taskScanBLEDevices()
 {
-    nCurrentState = 1;
+    Serial.println("Task: scan BLE devices   Time:" + String(now()));
 
     initBLEDev();
     delay(200);
 
+    isBLEScanInProgress = true;
+    sScanDone.setWaiting();
+
     startBLEDevicesScan(nDeviceScanTimeout, onDeviceFound);
+
+    tScanBLECompleted.waitFor(&sScanDone);
 }
 
-void UpdateState1()
+void taskScanBLECompleted()
 {
-    //Nothing...
+    Serial.println("Task: Scan completed");
+    isBLEScanInProgress = false;
+
+    if ( sScanDone.getStatus() >= 0) { 
+
+        reportBLEDevicesToMQTT();
+
+        tReadData.enableDelayed(100);
+    }
+    else {
+
+        delay(20);
+        deinitBLEDev();
+
+        Serial.println("Restart BLE scan...");
+        tScanBLEDevices.enableDelayed(nRescanDevicesTime);   //re-start Scan BLE devices task.
+    }
 }
 
 ///////////////////////////////////////
 
-static int nUpdateListEmptyCounter = 0;
-
-void InitState2()
+bool onEnableReadDataFromDevices()
 {
-    nCurrentState = 2;
-
-    initBLEDev();
-    vTaskDelay(500 / portTICK_PERIOD_MS);
+    return !isBLEScanInProgress;
 }
 
-void UpdateState2()
+void taskReadDataFromDevices()
 {
-    Serial.println("State: Read sensors data");
+    Serial.println("Task: Read sensors data   Time:" + String(now()));
 
     if (myDevices.size() == 0) {
-        Serial.println("Device list is empty!");      
-        InitState1();
+        Serial.println("Device list is empty!");
         return;
     }
 
-    int count = myDevices.connectAndReadData(myUpdateList);
-    if (count > 0) {
-        nUpdateListEmptyCounter = 0;
+    initBLEDev();
+    vTaskDelay(500 / portTICK_PERIOD_MS);
 
+    int count = myDevices.connectAndReadData(myUpdateList);
+
+    delay(20);
+    deinitBLEDev();
+
+    if (count > 0) {
         Serial.println("Update count " + String(myUpdateList.itemCount()));            
-        InitState3();
+
+        tReportData.restartDelayed(50);
     }
     else {
         Serial.println("Update list is empty.... enter sleep");
 
-        nUpdateListEmptyCounter++;
-        if (nUpdateListEmptyCounter > 5) {
-            Serial.println("Rescan devices..");
-            InitState1();
-        }
-        else {
-            InitState4();
-        }
+        //TODO: add some re-read devices data...
+        tReadData.restartDelayed(5 * TASK_MINUTE);
+
     }
+
+    Serial.println("Task: done.");
 }
 
 ///////////////////////////////////////
 
-void InitState3()
+void taskReportData()
 {
-    nCurrentState = 3;
-    Serial.println("State: WiFi and MQTT connect");
+    Serial.println("Task: Report data to MQTT    Time:" + String(now()));
 
-    deinitBLEDev();
-    delay(2000);
-
-    if (connectToWifiAndMQTT(g_maxNumberOfConnectAttempts)) {
-
-        delay(50);
+    if (!connectToWifiAndMQTT(g_maxNumberOfConnectAttempts)) {
+        Serial.println("Err: Unable to connect to WiFi!");
+        
+        ts.currentTask().restartDelayed(5 * TASK_MINUTE);
+        return;
     }
-    else {
-        Serial.println("Unable to connect to WiFi!");
-        delay(2000);
 
-        ESP.restart();
-    }
-}
-
-void UpdateState3()
-{
-    MyBLEDevice* pDev = nullptr;
-    for(int i = 0; i < 5; i++) {
+    for(int i = 0; i < myUpdateList.maxQueueSize(); i++) {
         if (myUpdateList.isEmpty())
             break;
 
-        pDev = myUpdateList.dequeue();
+        MyBLEDevice* pDev = myUpdateList.dequeue();
         assert(pDev);
-        sendSensorDataToMQTT(pDev->devId(), pDev->getData());        
+        sendSensorDataToMQTT(pDev->devId(), pDev->getData());
     }
+    count++;
 
     delay(10);  //to flush MQTT data...
-    Serial.println();
-
-    if (myUpdateList.isEmpty()) {
-
-        count++;
-
-        InitState4();
-    }
-    else {
-        delay(50);
-    }
-}
-
-///////////////////////////////////////
-
-void InitState4()
-{
-    nCurrentState = 4;
-    Serial.println("State: IDLE state");
-
-    bleDataScanTimer.reset();    
-}
-
-void UpdateState4()
-{
-    if (bleDeviceScanTimer.hasTimedOut()) {
-        InitState1();
-    }
-    else if (bleDataScanTimer.hasTimedOut()) {
-        InitState2();
-    }
-
-    delay(1000);
-}
-
-///////////////////////////////////////
-
-void InitState5()
-{
-    Serial.flush();
-
-
-#if 0
-    WiFi.mode(WIFI_STA);
-    if (connectToWifiAndMQTT(g_maxNumberOfConnectAttempts)) {
-        enterModemSleep(20000);
-
-
-    }
-
-
-
-
-        delay(50);
-        sendStatusOnlineMsg();
-    }
-    else {
-        Serial.println("Unable to connect to WiFi!");
-        delay(2000);
-
-        ESP.restart();
-    }
-#endif
-
-}
-
-void UpdateState5()
-{
-
+    Serial.println("Task: done.");
 }
 
 ///////////////////////////////////////
 
 void loop() 
 {
-    Serial1.println("Hello world..");
+    ts.execute();
 
-    switch(nCurrentState) {
-    case 0: UpdateState0(); break;
-    case 1: UpdateState1(); break;
-    case 2: UpdateState2(); break;
-    case 3: UpdateState3(); break;
-    case 4: UpdateState4(); break;
-    default:
-        break;
-    }
+    timeClient.update();
 
     //TODO: ArduinoOTA.handle();
-
-
-
-
-#if 0
-    unsigned long sleepTime = 30 * 1000;  //default sleep time
-
-    switch(currentState)
-    {
-    case STATE_IDLE:
-        Serial.println("State: IDLE");
-        if (bleDeviceScanTimer.hasTimedOut()) {
-            scanForDevices(nDeviceScanTimeout);
-            bleDeviceScanTimer.reset();
-        }
-    
-        if (bleDataScanTimer.hasTimedOut()) {
-            Serial.println("aa");
-            if (!myDevicesList.empty()) {
-                currentState = STATE_READ_BLE_DATA;
-                sleepTime = 10;
-            }
-            else {
-              Serial.println("Empty list..");              
-            }
-
-            bleDataScanTimer.reset();   
-        }
-
-        if (currentState == STATE_IDLE) {
-            sleepTime = min(bleDeviceScanTimer.getRemainingTime(), bleDataScanTimer.getRemainingTime());
-        }
-        break;
-
-    case STATE_READ_BLE_DATA:
-        Serial.println("State: Read BLE data");
-
-        if (!myDevicesList.empty()) {
-  
-            std::vector<MiTempDev*>::iterator it;
-            for(it = myDevicesList.begin(); it != myDevicesList.end(); ++it) {
-                connectAndReadDevice(*it);
-            }
-
-            currentState = STATE_CONNECT_WIFI_AND_MQTT;
-            sleepTime = 500;
-            
-        }
-        else {
-            Serial.println("Device list is empty!");      
-        }
-        break;
-
-    case STATE_CONNECT_WIFI_AND_MQTT:
-        Serial.println("State: WiFi and MQTT connect");
-        if (connectToWifiAndMQTT()) {
-
-            // call poll() regularly to allow the library to send MQTT keep alives which
-            // avoids being disconnected by the broker
-            pollMQTT();
-            currentState = STATE_SEND_MQTT_DATA;
-            sleepTime = 50;
-        }
-        else {
-            Serial.println("Unable to connect to WiFi!");          
-        }
-        break;
-
-    case STATE_SEND_MQTT_DATA:
-        Serial.println("State: Send MQTT data");
-    
-        MiTempDev* pDev;
-        while(!myUpdateList.isEmpty()) {
-            pDev = myUpdateList.dequeue();
-    
-            sendMiTempDataToMQTT(pDev);
-        }
-
-        flushMQTT();
-        Serial.println();
-
-        sleepTime = 2000;
-        currentState = STATE_DISCONNECT_WIFI;
-        break;
-
-    case STATE_DISCONNECT_WIFI:
-        Serial.println("State: WiFi disconnect");
-    
-        WiFi.disconnect();
-        count++;     
-
-        bleDataScanTimer.reset();
-        currentState = STATE_IDLE;
-        break;
-    }
-
-    Serial.println("Sleep (" + String(count) + ") for: " + String(sleepTime) + "ms..........");
-    delay(sleepTime);
-#endif
 
 }
